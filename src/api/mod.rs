@@ -4,7 +4,7 @@ use crate::auth::refresh_access_token;
 use crate::config::Config;
 use crate::models::*;
 use errors::SpotifyError;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use reqwest::{Method, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -60,9 +60,16 @@ impl SpotifyClient {
             );
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-            let mut req = self.http.request(method.clone(), &url).headers(headers);
+            let mut req = self.http.request(method.clone(), &url);
             if let Some(ref b) = body {
-                req = req.json(b);
+                req = req.headers(headers).json(b);
+            } else {
+                if method == Method::POST || method == Method::PUT || method == Method::DELETE {
+                    headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
+                    req = req.headers(headers).body("");
+                } else {
+                    req = req.headers(headers);
+                }
             }
             req
         };

@@ -82,7 +82,7 @@ pub async fn run_queue(
             println!("  {}", "Queue is empty.".bright_black());
         } else {
             println!("  {}", "Up Next:".bright_black());
-            for (idx, track) in queue_resp.queue.iter().take(10).enumerate() {
+            for (idx, track) in queue_resp.queue.iter().take(15).enumerate() {
                 println!(
                     "    {}. {} - {} [{}]",
                     idx + 1,
@@ -91,8 +91,42 @@ pub async fn run_queue(
                     format_duration(track.duration_ms).bright_black()
                 );
             }
-            if queue_resp.queue.len() > 10 {
-                println!("    ... and {} more tracks in queue", queue_resp.queue.len() - 10);
+            if queue_resp.queue.len() > 15 {
+                println!("    ... and {} more tracks in queue", queue_resp.queue.len() - 15);
+            }
+            println!();
+
+            // Interactive track selection from queue
+            let mut options = vec!["Exit queue".to_string()];
+            for (idx, track) in queue_resp.queue.iter().take(15).enumerate() {
+                options.push(format!(
+                    "Play {}. {} - {}",
+                    idx + 1,
+                    track.name,
+                    track.artists_str()
+                ));
+            }
+
+            if let Ok(choice) = inquire::Select::new("Select a track from queue to play directly:", options).prompt() {
+                if choice != "Exit queue" {
+                    let parts: Vec<&str> = choice.split_whitespace().collect();
+                    if let Some(num_str) = parts.get(1) {
+                        let num_clean = num_str.trim_end_matches('.');
+                        if let Ok(idx) = num_clean.parse::<usize>() {
+                            if idx > 0 && idx <= queue_resp.queue.len() {
+                                let target_track = &queue_resp.queue[idx - 1];
+                                if let Some(ref uri) = target_track.uri {
+                                    client.play(None, Some(vec![uri.clone()]), None, None).await?;
+                                    println!(
+                                        "▶ Now playing from queue: {} - {}",
+                                        target_track.name.bold().green(),
+                                        target_track.artists_str().cyan()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         println!();
