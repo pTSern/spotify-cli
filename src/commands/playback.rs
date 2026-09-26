@@ -10,6 +10,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 struct LivePlayerState {
     track_name: String,
@@ -98,13 +99,45 @@ pub async fn run_status(client: &mut SpotifyClient, static_mode: bool) -> Result
     run_interactive_status(client).await
 }
 
-fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
-        format!("{}...", truncated)
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+        } else {
+            out.push(c);
+        }
     }
+    out
+}
+
+fn visible_width(s: &str) -> usize {
+    strip_ansi(s).width()
+}
+
+fn truncate_str(s: &str, max_len: usize) -> String {
+    let total_width = s.width();
+    if total_width <= max_len {
+        return s.to_string();
+    }
+
+    let target_width = max_len.saturating_sub(2);
+    let mut current_width = 0;
+    let mut truncated = String::new();
+    for c in s.chars() {
+        let cw = c.width().unwrap_or(0);
+        if current_width + cw > target_width {
+            break;
+        }
+        truncated.push(c);
+        current_width += cw;
+    }
+    format!("{}..", truncated)
 }
 
 async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
@@ -328,7 +361,7 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
     Ok(())
 }
 
-const PLAYER_LINES: u16 = 8;
+const PLAYER_LINES: u16 = 10;
 
 fn render_player(
     state: &LivePlayerState,
@@ -339,38 +372,40 @@ fn render_player(
     first_render: bool,
     last_rendered_lines: u16,
 ) -> u16 {
-    let play_badge = if state.is_playing {
-        "▶ Playing".green().bold()
-    } else {
-        "⏸ Paused".yellow().bold()
-    };
-
-    let shuffle_badge = if state.shuffle_state {
-        "🔀 on".green()
-    } else {
-        "🔀 off".bright_black()
-    };
-
-    let repeat_badge = match state.repeat_state.as_str() {
-        "track" => "🔂 track".green(),
-        "context" => "🔁 all".green(),
-        _ => "🔁 off".bright_black(),
-    };
-
     let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
-    let max_text_width = term_width.saturating_sub(15).clamp(20, 50);
+    let box_width = term_width.clamp(68, 76);
+    let inner_width = box_width.saturating_sub(4);
 
-    let bar_width: usize = if term_width < 75 { 20 } else { 26 };
-    let ratio = if state.duration_ms > 0 {
-        (state.current_ms as f64 / state.duration_ms as f64).clamp(0.0, 1.0)
+    let play_badge = if state.is_playing {
+        "▶ PLAYING".green().bold()
     } else {
-        0.0
+        "⏸ PAUSED".yellow().bold()
     };
-    let filled_len = ((bar_width as f64) * ratio).round() as usize;
-    let unfilled_len = bar_width.saturating_sub(filled_len);
-    let filled = "━".repeat(filled_len).green().bold();
-    let unfilled = "─".repeat(unfilled_len).bright_black();
 
+    let device_badge = format!("💻 {}", truncate_str(&state.device_name, 22)).bright_black();
+
+    // Volume slider
+    let vol_len: usize = 6;
+    let vol_ratio = (state.volume_percent as f32 / 100.0).clamp(0.0, 1.0);
+    let vol_filled = ((vol_len as f32) * vol_ratio).round() as usize;
+    let vol_empty = vol_len.saturating_sub(vol_filled);
+    let vol_slider = format!(
+        "🔊 {:>3}% [{}{}]",
+        state.volume_percent,
+        "━".repeat(vol_filled).magenta(),
+        "─".repeat(vol_empty).bright_black()
+    );
+
+    let title_line = format!("🎵 {}", truncate_str(&state.track_name, inner_width.saturating_sub(25).min(38))).bold().white();
+    let meta_raw = if state.album.is_empty() {
+        state.artists.clone()
+    } else {
+        format!("{} • {}", state.artists, state.album)
+    };
+    let meta_line = format!("   {}", truncate_str(&meta_raw, inner_width.saturating_sub(20).min(44))).cyan();
+    let seek_info = format!("seek: ±{}s", status_settings.seek_step).bright_black();
+
+    // Control buttons (Spotify layout)
     let seek_keys = status_settings.keys_for_action("seek_forward");
     let seek_back_keys = status_settings.keys_for_action("seek_backward");
     let vol_up_keys = status_settings.keys_for_action("vol_up");
@@ -402,50 +437,97 @@ fn render_player(
         format!("{}/{}", prev_keys, next_keys)
     };
 
-    let queue_display = if queue_keys.is_empty() {
-        "q".to_string()
-    } else {
-        queue_keys
-    };
-
+    let queue_display = if queue_keys.is_empty() { "q".to_string() } else { queue_keys };
     let queue_badge = if show_queue {
         format!("[{}] queue (open)", queue_display).cyan().bold()
     } else {
         format!("[{}] queue", queue_display).bright_black()
     };
 
+    let shuf_btn = if state.shuffle_state {
+        format!("[🔀 on]").green().bold()
+    } else {
+        format!("[🔀 off]").bright_black()
+    };
+    let prev_btn = format!("[⏮ {}]", prev_keys).bright_black();
+    let play_btn = if state.is_playing {
+        format!("( ▶ {} )", toggle_keys).green().bold()
+    } else {
+        format!("( ⏸ {} )", toggle_keys).yellow().bold()
+    };
+    let next_btn = format!("[⏭ {}]", next_keys).bright_black();
+    let rep_btn = match state.repeat_state.as_str() {
+        "track" => format!("[🔂 track]").green().bold(),
+        "context" => format!("[🔁 all]").green().bold(),
+        _ => format!("[🔁 off]").bright_black(),
+    };
+    let controls_bar = format!("{}    {}    {}    {}    {}", shuf_btn, prev_btn, play_btn, next_btn, rep_btn);
+
+    // Scrubber
+    let scrubber_len = inner_width.saturating_sub(24).clamp(18, 30);
+    let ratio = if state.duration_ms > 0 {
+        (state.current_ms as f64 / state.duration_ms as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let knob_pos = ((scrubber_len as f64) * ratio).round() as usize;
+    let filled = "━".repeat(knob_pos).green().bold();
+    let knob = "●".white().bold();
+    let unfilled = "─".repeat(scrubber_len.saturating_sub(knob_pos)).bright_black();
+    let scrubber_bar = format!(
+        "{}  {}{}{}  {}",
+        format_duration(state.current_ms).cyan(),
+        filled,
+        knob,
+        unfilled,
+        format_duration(state.duration_ms).bright_black()
+    );
+
     let mut out = stdout();
     if !first_render {
         let _ = crossterm::execute!(out, MoveUp(last_rendered_lines), MoveToColumn(0), Clear(ClearType::FromCursorDown));
     }
 
-    // Line 1
-    println!("  {} {}", play_badge, "(Interactive Player)".bright_black());
-    // Line 2
-    println!("  {} {}", "Track:  ".bright_black(), truncate_str(&state.track_name, max_text_width).bold().white());
-    // Line 3
-    println!("  {} {}", "Artist: ".bright_black(), truncate_str(&state.artists, max_text_width).cyan());
-    // Line 4
-    println!("  {} {}", "Album:  ".bright_black(), truncate_str(&state.album, max_text_width).italic());
-    // Line 5
-    println!(
-        "  {} [{}{}] {} / {}",
-        "Time:   ".bright_black(),
-        filled,
-        unfilled,
-        format_duration(state.current_ms).cyan(),
-        format_duration(state.duration_ms).bright_black()
-    );
-    // Line 6
-    println!(
-        "  {} {} | Vol: {} | {} | {}",
-        "Device: ".bright_black(),
-        truncate_str(&state.device_name, 18).bold(),
-        format!("{}%", state.volume_percent).magenta(),
-        shuffle_badge,
-        repeat_badge
-    );
-    // Line 7
+    // 1. Box Top Border
+    println!("┌{}┐", "─".repeat(inner_width + 2));
+
+    // 2. Status & Device
+    let s_w = visible_width(&play_badge.to_string());
+    let d_w = visible_width(&device_badge);
+    let pad2 = inner_width.saturating_sub(s_w + d_w);
+    println!("│ {}{}{} │", play_badge, " ".repeat(pad2), device_badge);
+
+    // 3. Track Title & Volume Slider
+    let t_w = visible_width(&title_line.to_string());
+    let v_w = visible_width(&vol_slider);
+    let pad3 = inner_width.saturating_sub(t_w + v_w);
+    println!("│ {}{}{} │", title_line, " ".repeat(pad3), vol_slider);
+
+    // 4. Artists, Album & Seek info
+    let m_w = visible_width(&meta_line.to_string());
+    let sk_w = visible_width(&seek_info);
+    let pad4 = inner_width.saturating_sub(m_w + sk_w);
+    println!("│ {}{}{} │", meta_line, " ".repeat(pad4), seek_info);
+
+    // 5. Spacer
+    println!("│ {} │", " ".repeat(inner_width));
+
+    // 6. Centered Controls Bar
+    let c_w = visible_width(&controls_bar);
+    let pad_c_l = inner_width.saturating_sub(c_w) / 2;
+    let pad_c_r = inner_width.saturating_sub(c_w + pad_c_l);
+    println!("│ {}{}{} │", " ".repeat(pad_c_l), controls_bar, " ".repeat(pad_c_r));
+
+    // 7. Centered Scrubber
+    let sc_w = visible_width(&scrubber_bar);
+    let pad_s_l = inner_width.saturating_sub(sc_w) / 2;
+    let pad_s_r = inner_width.saturating_sub(sc_w + pad_s_l);
+    println!("│ {}{}{} │", " ".repeat(pad_s_l), scrubber_bar, " ".repeat(pad_s_r));
+
+    // 8. Box Bottom Border
+    println!("└{}┘", "─".repeat(inner_width + 2));
+
+    // 9. Keybindings Description Row 1
     println!(
         "  {} seek {}s   {} vol {}%   {} play/pause   {} track",
         format!("[{}]", seek_display).bright_black(),
@@ -455,7 +537,8 @@ fn render_player(
         format!("[{}]", toggle_keys).bright_black(),
         format!("[{}]", track_display).bright_black(),
     );
-    // Line 8
+
+    // 10. Keybindings Description Row 2
     println!(
         "  {} shuffle   {} repeat   {}   {} settings   {} exit",
         format!("[{}]", shuffle_keys).bright_black(),
@@ -468,33 +551,54 @@ fn render_player(
     let mut lines_printed = PLAYER_LINES;
 
     if show_queue {
-        println!("  {}", "── Upcoming Queue ──".bold().cyan());
+        let q_title = "┌── Next in Queue ";
+        let q_w = visible_width(q_title);
+        let q_border_dash = (inner_width + 2).saturating_sub(q_w);
+        println!("{}{}", q_title.cyan().bold(), format!("{}┐", "─".repeat(q_border_dash)).bright_black());
         lines_printed += 1;
 
         match queue_tracks {
             Some(tracks) if !tracks.is_empty() => {
                 for (i, t) in tracks.iter().take(5).enumerate() {
-                    let title_artist = format!("{}. {} - {}", i + 1, t.name, t.artists_str());
+                    let num_title = format!(" {:>2}. {}", i + 1, truncate_str(&t.name, 28));
+                    let artist = truncate_str(&t.artists_str(), 18);
                     let dur = format_duration(t.duration_ms);
-                    let max_item_w = term_width.saturating_sub(18).clamp(20, 50);
-                    println!(
-                        "    {:<width$} {}",
-                        truncate_str(&title_artist, max_item_w).white(),
-                        dur.bright_black(),
-                        width = max_item_w
+
+                    let nt_w = visible_width(&num_title);
+                    let a_w = visible_width(&artist);
+                    let d_w = visible_width(&dur);
+
+                    let gap1 = 32usize.saturating_sub(nt_w).max(2);
+                    let gap2 = inner_width.saturating_sub(nt_w + gap1 + a_w + d_w);
+
+                    let line_content = format!(
+                        "{}{}{}{}{}",
+                        num_title.white(),
+                        " ".repeat(gap1),
+                        artist.bright_black(),
+                        " ".repeat(gap2),
+                        dur.cyan()
                     );
+                    println!("│ {} │", line_content);
                     lines_printed += 1;
                 }
             }
             Some(_) => {
-                println!("    {}", "(Queue is empty)".bright_black());
+                let msg = "   (Queue is empty)".bright_black();
+                let pad = inner_width.saturating_sub(visible_width(&msg.to_string()));
+                println!("│ {}{} │", msg, " ".repeat(pad));
                 lines_printed += 1;
             }
             None => {
-                println!("    {}", "Loading queue...".bright_black());
+                let msg = "   Loading queue...".bright_black();
+                let pad = inner_width.saturating_sub(visible_width(&msg.to_string()));
+                println!("│ {}{}{} │", msg, " ".repeat(pad), "");
                 lines_printed += 1;
             }
         }
+
+        println!("└{}┘", "─".repeat(inner_width + 2));
+        lines_printed += 1;
     }
 
     let _ = out.flush();
