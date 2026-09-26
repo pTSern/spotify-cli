@@ -81,11 +81,17 @@ Spotify requires a free Developer App Client ID for API access:
 ## Commands & Usage
 
 > Note: Both `spotify-cli` and `spotify` (via the included wrapper) can be used interchangeably.
+> **Dual Mode**: All commands support both **Direct CLI arguments** and **Interactive UI selection** when arguments are omitted!
 
 ### Command Menu & Cheatsheet
 ```bash
-# Show complete interactive/visual cheatsheet of all available commands
+# Interactive menu (browse by category or view all)
 spotify-cli menu                # alias: spotify-cli m, spotify-cli commands
+
+# Direct CLI view of a specific category
+spotify-cli menu playback
+spotify-cli menu volume
+spotify-cli menu all
 ```
 
 ### Status & Playback
@@ -119,6 +125,10 @@ spotify-cli seek -10            # skip 10 seconds back
 
 ### Volume & Modes
 ```bash
+# Interactive volume selector (arrow keys + hit Enter to apply)
+spotify-cli vol
+
+# Direct volume control
 spotify-cli vol 80              # Set volume directly to 80%
 spotify-cli vol up 10           # Increase volume by 10%
 spotify-cli vol down 5          # Decrease volume by 5%
@@ -131,19 +141,19 @@ spotify-cli repeat track        # or all, off, or cycle without args
 
 ### Devices
 ```bash
-# List available devices
+# List available devices and interactively prompt to switch
 spotify-cli devices             # alias: spotify-cli dev
 
-# Switch to a device by name
+# Direct switch to a device by name
 spotify-cli devices --switch "PC"
 
-# Pick interactively from a menu
+# Pick interactively from a dedicated menu
 spotify-cli devices -i
 ```
 
 ### Queue
 ```bash
-# View upcoming tracks in queue
+# View upcoming tracks in queue and interactively select one to play directly
 spotify-cli queue
 
 # Add a track or album to queue
@@ -178,4 +188,20 @@ spotify-cli history -l 25
 # View your top tracks or artists
 spotify-cli top
 spotify-cli top --artists
+```
+
+### Diagnostics & Automated Testing
+```bash
+# Interactive diagnostic test suite selector
+spotify-cli test                # alias: spotify-cli tst, spotify-cli check
+
+# Direct CLI execution for specific test suite:
+spotify-cli test all            # Runs all tests in sequence
+spotify-cli test playback       # Tests state query, pause & resume
+spotify-cli test volume         # Tests volume change & restoration
+spotify-cli test devices        # Tests device query
+spotify-cli test search         # Tests search & queue queries
+spotify-cli test library        # Tests history & top stats
+
+# All results and timestamps are logged to the logs/ directory!
 ```

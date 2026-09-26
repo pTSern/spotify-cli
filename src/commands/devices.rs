@@ -18,6 +18,33 @@ pub async fn run_devices(
 
     if switch_target.is_none() && !interactive {
         print_device_list(&devices);
+
+        let mut labels = vec!["Keep current device (Exit)".to_string()];
+        for d in &devices {
+            let status = if d.is_active { " (active)" } else { "" };
+            labels.push(format!("Switch to: {} - {}{}", d.name, d.device_type, status));
+        }
+
+        if let Ok(ans) = inquire::Select::new("Action:", labels).prompt() {
+            if ans != "Keep current device (Exit)" {
+                let idx = devices.iter().position(|d| {
+                    let status = if d.is_active { " (active)" } else { "" };
+                    format!("Switch to: {} - {}{}", d.name, d.device_type, status) == ans
+                });
+                if let Some(i) = idx {
+                    let dev = &devices[i];
+                    if dev.is_active {
+                        println!("Device '{}' is already active.", dev.name.cyan());
+                        return Ok(());
+                    }
+                    if let Some(ref id) = dev.id {
+                        println!("Switching playback to '{}' ({})...", dev.name.bold(), dev.device_type);
+                        client.transfer_playback(id, true).await?;
+                        println!("{}", "✓ Playback transferred successfully!".green());
+                    }
+                }
+            }
+        }
         return Ok(());
     }
 

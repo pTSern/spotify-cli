@@ -62,9 +62,11 @@ enum Commands {
 
     /// Adjust playback volume (e.g. 'vol up 10', 'vol down 5', 'vol to 80', or 'vol 65')
     #[command(alias = "vol", alias = "v")]
+    /// Adjust playback volume (e.g. 'vol', 'vol 80', 'vol up 10', 'vol down 5', 'vol to 60')
+    #[command(alias = "vol", alias = "v")]
     Volume {
-        /// Action ('up', 'down', 'to') or a direct number (0-100)
-        action_or_amount: String,
+        /// Action ('up', 'down', 'to') or direct number (0-100). If omitted, interactive UI opens.
+        action_or_amount: Option<String>,
         /// Amount (0-100) when using 'up', 'down', or 'to'
         amount: Option<u32>,
     },
@@ -129,9 +131,19 @@ enum Commands {
         limit: u32,
     },
 
-    /// Display full CLI command menu and cheatsheet
+    /// Display CLI command menu and cheatsheet (interactive or by category)
     #[command(alias = "m", alias = "commands", alias = "help-menu")]
-    Menu,
+    Menu {
+        /// Optional category to view directly
+        category: Option<String>,
+    },
+
+    /// Run automated API diagnostic tests (interactive or with filter)
+    #[command(alias = "tst", alias = "check")]
+    Test {
+        /// Filter: playback, volume, devices, search, library, or all
+        filter: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -220,8 +232,8 @@ async fn main() {
     };
 
     // Menu can be shown without login
-    if let Commands::Menu = command {
-        commands::menu::run_menu();
+    if let Commands::Menu { category } = command {
+        commands::menu::run_menu(category);
         return;
     }
 
@@ -254,7 +266,8 @@ async fn main() {
 
     let res = match command {
         Commands::Auth { .. } => unreachable!(),
-        Commands::Menu => unreachable!(),
+        Commands::Menu { .. } => unreachable!(),
+        Commands::Test { filter } => commands::test::run_test(&mut client, filter).await,
         Commands::Status => commands::playback::run_status(&mut client).await,
         Commands::Play(args) => {
             let q = if args.query.is_empty() {
@@ -279,7 +292,7 @@ async fn main() {
         Commands::Volume {
             action_or_amount,
             amount,
-        } => commands::volume::run_volume(&mut client, &action_or_amount, amount).await,
+        } => commands::volume::run_volume(&mut client, action_or_amount, amount).await,
         Commands::Shuffle { mode } => commands::playback::run_shuffle(&mut client, mode).await,
         Commands::Repeat { mode } => commands::playback::run_repeat(&mut client, mode).await,
         Commands::Devices {

@@ -80,8 +80,15 @@ const COMMANDS: &[CommandEntry] = &[
     // Volume
     CommandEntry {
         category: "Volume",
-        command: "volume <amt>",
+        command: "volume",
         aliases: "vol, v",
+        example: "spotify-cli vol",
+        description: "Interactive volume selector",
+    },
+    CommandEntry {
+        category: "Volume",
+        command: "volume <amt>",
+        aliases: "vol <amt>",
         example: "spotify-cli vol 80",
         description: "Set volume directly (0-100%)",
     },
@@ -113,7 +120,7 @@ const COMMANDS: &[CommandEntry] = &[
         command: "devices",
         aliases: "dev, d",
         example: "spotify-cli devices",
-        description: "List all active/connected Spotify devices",
+        description: "List active devices & prompt to switch",
     },
     CommandEntry {
         category: "Devices",
@@ -143,7 +150,7 @@ const COMMANDS: &[CommandEntry] = &[
         command: "queue",
         aliases: "q",
         example: "spotify-cli queue",
-        description: "Display currently playing and upcoming queue tracks",
+        description: "Display upcoming queue & prompt to play a track directly",
     },
     CommandEntry {
         category: "Search & Queue",
@@ -190,6 +197,22 @@ const COMMANDS: &[CommandEntry] = &[
         description: "List your top tracks or top artists",
     },
 
+    // Diagnostics & Tests
+    CommandEntry {
+        category: "Diagnostics",
+        command: "test",
+        aliases: "tst, check",
+        example: "spotify-cli test",
+        description: "Interactive system test runner with logging to logs/",
+    },
+    CommandEntry {
+        category: "Diagnostics",
+        command: "test <filter>",
+        aliases: "test all",
+        example: "spotify-cli test [playback|volume|devices|search|library|all]",
+        description: "Direct CLI test runner for specific subsystem",
+    },
+
     // Auth & Setup
     CommandEntry {
         category: "Auth",
@@ -221,22 +244,67 @@ const COMMANDS: &[CommandEntry] = &[
     },
 ];
 
-pub fn run_menu() {
-    println!("\n{}", "================================================================================".green());
-    println!("                         {} {}", "SPOTIFY CLI".green().bold(), "- COMMAND MENU".white().bold());
-    println!("  Run any command using: {} or {}", "spotify-cli <command>".cyan(), "spotify <command>".cyan());
-    println!("{}\n", "================================================================================".green());
-
+pub fn run_menu(category_filter: Option<String>) {
     let categories = [
         "Playback",
         "Volume",
         "Devices",
         "Search & Queue",
         "Library",
+        "Diagnostics",
         "Auth",
     ];
 
+    let selected_category = match category_filter {
+        Some(f) => {
+            let f_lower = f.to_lowercase();
+            if f_lower == "all" {
+                "all".to_string()
+            } else {
+                categories
+                    .iter()
+                    .find(|&&c| c.to_lowercase().contains(&f_lower))
+                    .map(|&c| c.to_string())
+                    .unwrap_or_else(|| "all".to_string())
+            }
+        }
+        None => {
+            println!("\n{}", "================================================================================".green());
+            println!("                         {} {}", "SPOTIFY CLI".green().bold(), "- COMMAND MENU".white().bold());
+            println!("  Run any command using: {} or {}", "spotify-cli <command>".cyan(), "spotify <command>".cyan());
+            println!("{}\n", "================================================================================".green());
+
+            let mut options = vec!["View All Commands (Full Cheatsheet)".to_string()];
+            for cat in categories {
+                options.push(format!("View {} Commands", cat));
+            }
+            options.push("Exit Menu".to_string());
+
+            let choice = match inquire::Select::new("Select category to view:", options).prompt() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            if choice.starts_with("View All") {
+                "all".to_string()
+            } else if choice.starts_with("Exit") {
+                return;
+            } else {
+                categories
+                    .iter()
+                    .find(|&&c| choice.contains(c))
+                    .map(|&c| c.to_string())
+                    .unwrap_or_else(|| "all".to_string())
+            }
+        }
+    };
+
+    println!();
     for cat in categories {
+        if selected_category != "all" && selected_category != cat {
+            continue;
+        }
+
         let mut table = Table::new();
         table
             .load_preset(UTF8_FULL)

@@ -5,4 +5,5 @@ pub mod menu;
 pub mod playback;
 pub mod queue;
 pub mod search;
+pub mod test;
 pub mod volume;
