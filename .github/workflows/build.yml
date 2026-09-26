@@ -6,7 +6,18 @@ on:
     tags: [ "v*" ]
   pull_request:
     branches: [ "main", "master" ]
+  release:
+    types: [ published ]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish to GitHub Releases"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag name (e.g. v0.1.0 - required if publishing via manual dispatch)"
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -77,7 +88,10 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -95,4 +109,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
           generate_release_notes: true
