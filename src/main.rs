@@ -32,9 +32,13 @@ enum Commands {
         action: AuthCommands,
     },
 
-    /// Show current playback status with live progress bar
+    /// Show current playback status (interactive real-time player by default)
     #[command(alias = "st", alias = "info")]
-    Status,
+    Status {
+        /// Print status once without opening interactive player
+        #[arg(short = 's', long = "static", alias = "once")]
+        r#static: bool,
+    },
 
     /// Resume playback or search & play a track/album/playlist
     #[command(alias = "p", alias = "resume")]
@@ -222,7 +226,7 @@ async fn main() {
         None => {
             // Default with no args: show status if logged in, else show help
             if config.access_token.is_some() {
-                Commands::Status
+                Commands::Status { r#static: false }
             } else {
                 println!("{}", "Welcome to Spotify CLI!".green().bold());
                 println!("Run `spotify-cli auth login` to connect your Spotify account.");
@@ -279,7 +283,7 @@ async fn main() {
         Commands::Auth { .. } => unreachable!(),
         Commands::Menu { .. } => unreachable!(),
         Commands::Test { filter } => commands::test::run_test(&mut client, filter).await,
-        Commands::Status => commands::playback::run_status(&mut client).await,
+        Commands::Status { r#static } => commands::playback::run_status(&mut client, r#static).await,
         Commands::Play(args) => {
             let q = if args.query.is_empty() {
                 None

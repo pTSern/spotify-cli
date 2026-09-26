@@ -299,7 +299,7 @@ pub async fn run_menu(
     };
 
     if choice.starts_with("▶") {
-        playback::run_status(client).await?;
+        playback::run_status(client, false).await?;
     } else if choice.starts_with("⏯") {
         playback::run_toggle(client).await?;
     } else if choice.starts_with("⏭") {

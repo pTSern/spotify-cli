@@ -81,6 +81,17 @@ impl VolumeSettings {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StatusSettings {
+    pub seek_step: u32, // in seconds, default 10
+}
+
+impl Default for StatusSettings {
+    fn default() -> Self {
+        Self { seek_step: 10 }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Config {
     pub client_id: Option<String>,
@@ -90,6 +101,8 @@ pub struct Config {
     pub default_device_id: Option<String>,
     #[serde(default)]
     pub volume_settings: VolumeSettings,
+    #[serde(default)]
+    pub status_settings: StatusSettings,
 }
 
 impl Config {

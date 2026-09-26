@@ -94,10 +94,23 @@ spotify-cli menu volume
 spotify-cli menu all
 ```
 
-### Status & Playback
+### Status & Real-Time Player
 ```bash
-# View playback status with progress bar
+# Interactive real-time player (updates progress locally, hotkeys for seek/vol/skip/settings)
 spotify-cli status              # or just 'spotify-cli'
+# Player Hotkeys:
+#   ← / →     Seek back / forward (customizable step, default 10s)
+#   ↑ / ↓     Volume up / down (customizable step)
+#   Space / t Play / Pause toggle
+#   n / p     Next / Previous track
+#   f         Toggle Shuffle
+#   r         Cycle Repeat mode
+#   s         Open Settings menu (change seek/volume step)
+#   Esc / q   Exit player
+
+# One-shot static status (non-interactive)
+spotify-cli status --static     # alias: -s, --once
+```
 
 # Resume playback
 spotify-cli play
