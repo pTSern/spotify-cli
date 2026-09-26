@@ -1,3 +1,6 @@
+use crate::api::SpotifyClient;
+use crate::commands::{devices, library, playback, queue, search, test, volume};
+use anyhow::Result;
 use colored::Colorize;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::presets::UTF8_FULL;
@@ -83,7 +86,7 @@ const COMMANDS: &[CommandEntry] = &[
         command: "volume",
         aliases: "vol, v",
         example: "spotify-cli vol",
-        description: "Interactive volume selector",
+        description: "Interactive volume selector with keyboard shortcuts",
     },
     CommandEntry {
         category: "Volume",
@@ -244,7 +247,90 @@ const COMMANDS: &[CommandEntry] = &[
     },
 ];
 
-pub fn run_menu(category_filter: Option<String>) {
+pub async fn run_menu(
+    client: Option<&mut SpotifyClient>,
+    category_filter: Option<String>,
+) -> Result<()> {
+    if let Some(ref cat) = category_filter {
+        print_tables(cat);
+        return Ok(());
+    }
+
+    println!("\n{}", "================================================================================".green());
+    println!("                         {} {}", "SPOTIFY CLI".green().bold(), "- INTERACTIVE COMMAND HUB".white().bold());
+    println!("  Choose an action to execute immediately, or view cheatsheet tables.");
+    println!("{}\n", "================================================================================".green());
+
+    let options = vec![
+        "▶  Status (View current playback with progress bar)",
+        "⏯  Toggle (Play / Pause playback)",
+        "⏭  Next Track",
+        "⏮  Previous Track",
+        "🔊 Volume Controller (Interactive TUI with shortcuts)",
+        "📱 Devices Manager (List & Switch device)",
+        "📜 Playback Queue & Direct Play",
+        "🔍 Search Spotify (Interactive results with Play/Queue)",
+        "💾 Save Currently Playing Track",
+        "🕒 Recently Played History",
+        "⭐ Top Tracks",
+        "🧪 Run Diagnostics & Automated Tests",
+        "📖 View Full Command Cheatsheet",
+        "🚪 Exit Menu",
+    ];
+
+    let choice = match inquire::Select::new("Select action:", options).prompt() {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+
+    if choice.starts_with("📖") {
+        print_tables("all");
+        return Ok(());
+    } else if choice.starts_with("🚪") {
+        return Ok(());
+    }
+
+    let client = match client {
+        Some(c) => c,
+        None => {
+            println!("{}", "You must authenticate before running actions. Run `spotify-cli auth login`.".yellow());
+            return Ok(());
+        }
+    };
+
+    if choice.starts_with("▶") {
+        playback::run_status(client).await?;
+    } else if choice.starts_with("⏯") {
+        playback::run_toggle(client).await?;
+    } else if choice.starts_with("⏭") {
+        playback::run_next(client).await?;
+    } else if choice.starts_with("⏮") {
+        playback::run_previous(client).await?;
+    } else if choice.starts_with("🔊") {
+        volume::run_volume(client, None, None).await?;
+    } else if choice.starts_with("📱") {
+        devices::run_devices(client, None, false).await?;
+    } else if choice.starts_with("📜") {
+        queue::run_queue(client, None, "track").await?;
+    } else if choice.starts_with("🔍") {
+        let q = inquire::Text::new("Enter search query:").prompt()?;
+        if !q.trim().is_empty() {
+            search::run_search(client, q.trim(), "track", 10).await?;
+        }
+    } else if choice.starts_with("💾") {
+        library::run_save(client, "track").await?;
+    } else if choice.starts_with("🕒") {
+        library::run_history(client, 15).await?;
+    } else if choice.starts_with("⭐") {
+        library::run_top(client, "tracks", 10).await?;
+    } else if choice.starts_with("🧪") {
+        test::run_test(client, None).await?;
+    }
+
+    Ok(())
+}
+
+fn print_tables(category_filter: &str) {
     let categories = [
         "Playback",
         "Volume",
@@ -255,53 +341,9 @@ pub fn run_menu(category_filter: Option<String>) {
         "Auth",
     ];
 
-    let selected_category = match category_filter {
-        Some(f) => {
-            let f_lower = f.to_lowercase();
-            if f_lower == "all" {
-                "all".to_string()
-            } else {
-                categories
-                    .iter()
-                    .find(|&&c| c.to_lowercase().contains(&f_lower))
-                    .map(|&c| c.to_string())
-                    .unwrap_or_else(|| "all".to_string())
-            }
-        }
-        None => {
-            println!("\n{}", "================================================================================".green());
-            println!("                         {} {}", "SPOTIFY CLI".green().bold(), "- COMMAND MENU".white().bold());
-            println!("  Run any command using: {} or {}", "spotify-cli <command>".cyan(), "spotify <command>".cyan());
-            println!("{}\n", "================================================================================".green());
-
-            let mut options = vec!["View All Commands (Full Cheatsheet)".to_string()];
-            for cat in categories {
-                options.push(format!("View {} Commands", cat));
-            }
-            options.push("Exit Menu".to_string());
-
-            let choice = match inquire::Select::new("Select category to view:", options).prompt() {
-                Ok(c) => c,
-                Err(_) => return,
-            };
-
-            if choice.starts_with("View All") {
-                "all".to_string()
-            } else if choice.starts_with("Exit") {
-                return;
-            } else {
-                categories
-                    .iter()
-                    .find(|&&c| choice.contains(c))
-                    .map(|&c| c.to_string())
-                    .unwrap_or_else(|| "all".to_string())
-            }
-        }
-    };
-
-    println!();
+    let filter_lower = category_filter.to_lowercase();
     for cat in categories {
-        if selected_category != "all" && selected_category != cat {
+        if filter_lower != "all" && !cat.to_lowercase().contains(&filter_lower) {
             continue;
         }
 

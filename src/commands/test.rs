@@ -5,7 +5,7 @@ use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-struct TestLogger {
+pub struct TestLogger {
     log_file: File,
     log_path: String,
     passed: u32,
@@ -37,22 +37,45 @@ impl TestLogger {
         })
     }
 
-    fn record_pass(&mut self, test_name: &str, details: &str) {
-        self.passed += 1;
-        println!("  {} {} - {}", "[PASS]".green().bold(), test_name.bold(), details.bright_black());
-        let _ = writeln!(self.log_file, "[PASS] {} | Details: {}", test_name, details);
-    }
+    fn record_step(
+        &mut self,
+        test_name: &str,
+        method: &str,
+        endpoint: &str,
+        payload: Option<&str>,
+        status: Option<u16>,
+        response_data: &str,
+        is_success: bool,
+    ) {
+        if is_success {
+            self.passed += 1;
+            println!("  {} {} - {}", "[PASS]".green().bold(), test_name.bold(), format!("HTTP {}", status.unwrap_or(200)).bright_black());
+        } else {
+            self.failed += 1;
+            println!("  {} {} - {}", "[FAIL]".red().bold(), test_name.bold(), response_data.red());
+        }
 
-    fn record_fail(&mut self, test_name: &str, error: &str) {
-        self.failed += 1;
-        println!("  {} {} - {}", "[FAIL]".red().bold(), test_name.bold(), error.red());
-        let _ = writeln!(self.log_file, "[FAIL] {} | Error: {}", test_name, error);
+        let _ = writeln!(self.log_file, "--------------------------------------------------");
+        let _ = writeln!(self.log_file, "Result:   {}", if is_success { "PASS" } else { "FAIL" });
+        let _ = writeln!(self.log_file, "Test:     {}", test_name);
+        let _ = writeln!(self.log_file, "Request:  {} https://api.spotify.com/v1/{}", method, endpoint);
+        let _ = writeln!(self.log_file, "Headers:  Authorization: Bearer [REDACTED], Content-Type: application/json");
+        let _ = writeln!(self.log_file, "Payload:  {}", payload.unwrap_or("(none)"));
+        if let Some(s) = status {
+            let _ = writeln!(self.log_file, "Status:   {}", s);
+        }
+        let _ = writeln!(self.log_file, "Response:\n{}", response_data);
+        let _ = writeln!(self.log_file, "--------------------------------------------------\n");
     }
 
     fn record_skip(&mut self, test_name: &str, reason: &str) {
         self.skipped += 1;
         println!("  {} {} - {}", "[SKIP]".yellow().bold(), test_name.bold(), reason.yellow());
-        let _ = writeln!(self.log_file, "[SKIP] {} | Reason: {}", test_name, reason);
+        let _ = writeln!(self.log_file, "--------------------------------------------------");
+        let _ = writeln!(self.log_file, "Result:   SKIP");
+        let _ = writeln!(self.log_file, "Test:     {}", test_name);
+        let _ = writeln!(self.log_file, "Reason:   {}", reason);
+        let _ = writeln!(self.log_file, "--------------------------------------------------\n");
     }
 
     fn finish(&mut self) {
@@ -64,10 +87,10 @@ impl TestLogger {
             self.skipped.to_string().yellow().bold()
         );
         println!("{}", summary);
-        println!("Detailed log: {}", self.log_path.cyan());
+        println!("Full Diagnostic Log: {}", self.log_path.cyan());
         println!("========================================================\n");
 
-        let _ = writeln!(self.log_file, "\n==================================================");
+        let _ = writeln!(self.log_file, "==================================================");
         let _ = writeln!(
             self.log_file,
             "Summary: {} passed, {} failed, {} skipped",
@@ -139,15 +162,16 @@ async fn test_playback(client: &mut SpotifyClient, log: &mut TestLogger) {
     // Test 1: Get playback state
     match client.get_playback_state().await {
         Ok(state) => {
-            let info = match state {
-                Some(ref s) => {
-                    let playing = if s.is_playing { "Playing" } else { "Paused" };
-                    let track = s.item.as_ref().map(|t| t.name.as_str()).unwrap_or("none");
-                    format!("Status: {}, Track: {}", playing, track)
-                }
-                None => "No active playback session".to_string(),
-            };
-            log.record_pass("Playback State Query (GET /v1/me/player)", &info);
+            let json_str = serde_json::to_string_pretty(&state).unwrap_or_default();
+            log.record_step(
+                "Playback State Query",
+                "GET",
+                "me/player",
+                None,
+                Some(200),
+                &json_str,
+                true,
+            );
 
             // Test 2: If playing or paused, test pause/play toggle
             if let Some(s) = state {
@@ -155,35 +179,107 @@ async fn test_playback(client: &mut SpotifyClient, log: &mut TestLogger) {
                 if initial_playing {
                     match client.pause(None).await {
                         Ok(_) => {
-                            log.record_pass("Pause Command (PUT /v1/me/player/pause)", "HTTP 204 No Content");
+                            log.record_step(
+                                "Pause Playback",
+                                "PUT",
+                                "me/player/pause",
+                                Some("Content-Length: 0"),
+                                Some(204),
+                                "(empty response - paused)",
+                                true,
+                            );
                             tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
                             // Resume back
                             match client.play(None, None, None, None).await {
-                                Ok(_) => log.record_pass("Resume Command (PUT /v1/me/player/play)", "State restored"),
-                                Err(e) => log.record_fail("Resume Command", &e.to_string()),
+                                Ok(_) => log.record_step(
+                                    "Resume Playback (Restore)",
+                                    "PUT",
+                                    "me/player/play",
+                                    Some("Content-Length: 0"),
+                                    Some(204),
+                                    "(empty response - resumed)",
+                                    true,
+                                ),
+                                Err(e) => log.record_step(
+                                    "Resume Playback (Restore)",
+                                    "PUT",
+                                    "me/player/play",
+                                    None,
+                                    None,
+                                    &e.to_string(),
+                                    false,
+                                ),
                             }
                         }
-                        Err(e) => log.record_fail("Pause Command", &e.to_string()),
+                        Err(e) => log.record_step(
+                            "Pause Playback",
+                            "PUT",
+                            "me/player/pause",
+                            None,
+                            None,
+                            &e.to_string(),
+                            false,
+                        ),
                     }
                 } else {
                     match client.play(None, None, None, None).await {
                         Ok(_) => {
-                            log.record_pass("Play Command (PUT /v1/me/player/play)", "HTTP 204 No Content");
+                            log.record_step(
+                                "Resume Playback",
+                                "PUT",
+                                "me/player/play",
+                                Some("Content-Length: 0"),
+                                Some(204),
+                                "(empty response - resumed)",
+                                true,
+                            );
                             tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
                             // Pause back
                             match client.pause(None).await {
-                                Ok(_) => log.record_pass("Pause Command (PUT /v1/me/player/pause)", "State restored"),
-                                Err(e) => log.record_fail("Pause Command", &e.to_string()),
+                                Ok(_) => log.record_step(
+                                    "Pause Playback (Restore)",
+                                    "PUT",
+                                    "me/player/pause",
+                                    Some("Content-Length: 0"),
+                                    Some(204),
+                                    "(empty response - paused)",
+                                    true,
+                                ),
+                                Err(e) => log.record_step(
+                                    "Pause Playback (Restore)",
+                                    "PUT",
+                                    "me/player/pause",
+                                    None,
+                                    None,
+                                    &e.to_string(),
+                                    false,
+                                ),
                             }
                         }
-                        Err(e) => log.record_fail("Play Command", &e.to_string()),
+                        Err(e) => log.record_step(
+                            "Resume Playback",
+                            "PUT",
+                            "me/player/play",
+                            None,
+                            None,
+                            &e.to_string(),
+                            false,
+                        ),
                     }
                 }
             } else {
                 log.record_skip("Playback Control (Play/Pause)", "No active Spotify device to control");
             }
         }
-        Err(e) => log.record_fail("Playback State Query", &e.to_string()),
+        Err(e) => log.record_step(
+            "Playback State Query",
+            "GET",
+            "me/player",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
     println!();
 }
@@ -200,19 +296,48 @@ async fn test_volume(client: &mut SpotifyClient, log: &mut TestLogger) {
                     // Set test volume
                     match client.set_volume(test_vol, None).await {
                         Ok(_) => {
-                            log.record_pass(
-                                "Volume Adjustment (PUT /v1/me/player/volume)",
-                                &format!("Changed volume from {}% to {}%", orig_vol, test_vol),
+                            log.record_step(
+                                "Volume Adjustment",
+                                "PUT",
+                                &format!("me/player/volume?volume_percent={}", test_vol),
+                                Some("Content-Length: 0"),
+                                Some(204),
+                                &format!("Volume set to {}%", test_vol),
+                                true,
                             );
                             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
                             // Restore original volume
                             match client.set_volume(orig_vol, None).await {
-                                Ok(_) => log.record_pass("Volume Restoration", &format!("Restored to {}%", orig_vol)),
-                                Err(e) => log.record_fail("Volume Restoration", &e.to_string()),
+                                Ok(_) => log.record_step(
+                                    "Volume Restoration",
+                                    "PUT",
+                                    &format!("me/player/volume?volume_percent={}", orig_vol),
+                                    Some("Content-Length: 0"),
+                                    Some(204),
+                                    &format!("Volume restored to {}%", orig_vol),
+                                    true,
+                                ),
+                                Err(e) => log.record_step(
+                                    "Volume Restoration",
+                                    "PUT",
+                                    &format!("me/player/volume?volume_percent={}", orig_vol),
+                                    None,
+                                    None,
+                                    &e.to_string(),
+                                    false,
+                                ),
                             }
                         }
-                        Err(e) => log.record_fail("Volume Adjustment", &e.to_string()),
+                        Err(e) => log.record_step(
+                            "Volume Adjustment",
+                            "PUT",
+                            &format!("me/player/volume?volume_percent={}", test_vol),
+                            None,
+                            None,
+                            &e.to_string(),
+                            false,
+                        ),
                     }
                 } else {
                     log.record_skip("Volume Adjustment", "Device does not report volume percentage");
@@ -222,7 +347,15 @@ async fn test_volume(client: &mut SpotifyClient, log: &mut TestLogger) {
             }
         }
         Ok(None) => log.record_skip("Volume Adjustment", "No active playback session"),
-        Err(e) => log.record_fail("Volume Query", &e.to_string()),
+        Err(e) => log.record_step(
+            "Volume Query",
+            "GET",
+            "me/player",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
     println!();
 }
@@ -232,14 +365,26 @@ async fn test_devices(client: &mut SpotifyClient, log: &mut TestLogger) {
 
     match client.get_devices().await {
         Ok(devices) => {
-            let count = devices.len();
-            let names: Vec<String> = devices.iter().map(|d| format!("{}({})", d.name, d.device_type)).collect();
-            log.record_pass(
-                "Device Enumeration (GET /v1/me/player/devices)",
-                &format!("Found {} device(s): {}", count, names.join(", ")),
+            let json_str = serde_json::to_string_pretty(&devices).unwrap_or_default();
+            log.record_step(
+                "Device Enumeration",
+                "GET",
+                "me/player/devices",
+                None,
+                Some(200),
+                &json_str,
+                true,
             );
         }
-        Err(e) => log.record_fail("Device Enumeration", &e.to_string()),
+        Err(e) => log.record_step(
+            "Device Enumeration",
+            "GET",
+            "me/player/devices",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
     println!();
 }
@@ -251,38 +396,101 @@ async fn test_search_and_queue(client: &mut SpotifyClient, log: &mut TestLogger)
     match client.search("Bohemian Rhapsody", "track", 5, 0).await {
         Ok(res) => {
             let total = res.tracks.as_ref().map(|t| t.items.len()).unwrap_or(0);
+            let json_str = serde_json::to_string_pretty(&res.tracks).unwrap_or_default();
             if total > 0 {
-                log.record_pass("Track Search (GET /v1/search?type=track)", &format!("Returned {} results", total));
+                log.record_step(
+                    "Track Search",
+                    "GET",
+                    "search?q=Bohemian%20Rhapsody&type=track&limit=5&offset=0",
+                    None,
+                    Some(200),
+                    &json_str,
+                    true,
+                );
             } else {
-                log.record_fail("Track Search", "Expected >0 results for 'Bohemian Rhapsody'");
+                log.record_step(
+                    "Track Search",
+                    "GET",
+                    "search?q=Bohemian%20Rhapsody&type=track&limit=5&offset=0",
+                    None,
+                    Some(200),
+                    "No tracks returned in search response",
+                    false,
+                );
             }
         }
-        Err(e) => log.record_fail("Track Search", &e.to_string()),
+        Err(e) => log.record_step(
+            "Track Search",
+            "GET",
+            "search?q=Bohemian%20Rhapsody&type=track",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
 
     // Search Album
     match client.search("Abbey Road", "album", 5, 0).await {
         Ok(res) => {
             let total = res.albums.as_ref().map(|a| a.items.len()).unwrap_or(0);
+            let json_str = serde_json::to_string_pretty(&res.albums).unwrap_or_default();
             if total > 0 {
-                log.record_pass("Album Search (GET /v1/search?type=album)", &format!("Returned {} results", total));
+                log.record_step(
+                    "Album Search",
+                    "GET",
+                    "search?q=Abbey%20Road&type=album&limit=5&offset=0",
+                    None,
+                    Some(200),
+                    &json_str,
+                    true,
+                );
             } else {
-                log.record_fail("Album Search", "Expected >0 results for 'Abbey Road'");
+                log.record_step(
+                    "Album Search",
+                    "GET",
+                    "search?q=Abbey%20Road&type=album&limit=5&offset=0",
+                    None,
+                    Some(200),
+                    "No albums returned in search response",
+                    false,
+                );
             }
         }
-        Err(e) => log.record_fail("Album Search", &e.to_string()),
+        Err(e) => log.record_step(
+            "Album Search",
+            "GET",
+            "search?q=Abbey%20Road&type=album",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
 
     // Query Queue
     match client.get_queue().await {
         Ok(q) => {
-            let curr = q.currently_playing.map(|t| t.name).unwrap_or_else(|| "none".to_string());
-            log.record_pass(
-                "Queue Inspection (GET /v1/me/player/queue)",
-                &format!("Now playing: {}, Queue size: {}", curr, q.queue.len()),
+            let json_str = serde_json::to_string_pretty(&q).unwrap_or_default();
+            log.record_step(
+                "Queue Inspection",
+                "GET",
+                "me/player/queue",
+                None,
+                Some(200),
+                &json_str,
+                true,
             );
         }
-        Err(e) => log.record_fail("Queue Inspection", &e.to_string()),
+        Err(e) => log.record_step(
+            "Queue Inspection",
+            "GET",
+            "me/player/queue",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
     println!();
 }
@@ -293,34 +501,76 @@ async fn test_library(client: &mut SpotifyClient, log: &mut TestLogger) {
     // History
     match client.get_recently_played(5).await {
         Ok(hist) => {
-            log.record_pass(
-                "Recently Played (GET /v1/me/player/recently-played)",
-                &format!("Returned {} items", hist.items.len()),
+            let json_str = serde_json::to_string_pretty(&hist).unwrap_or_default();
+            log.record_step(
+                "Recently Played",
+                "GET",
+                "me/player/recently-played?limit=5",
+                None,
+                Some(200),
+                &json_str,
+                true,
             );
         }
-        Err(e) => log.record_fail("Recently Played", &e.to_string()),
+        Err(e) => log.record_step(
+            "Recently Played",
+            "GET",
+            "me/player/recently-played?limit=5",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
 
     // Top Tracks
     match client.get_user_top_tracks(5).await {
         Ok(tracks) => {
-            log.record_pass(
-                "Top Tracks (GET /v1/me/top/tracks)",
-                &format!("Returned {} items", tracks.items.len()),
+            let json_str = serde_json::to_string_pretty(&tracks).unwrap_or_default();
+            log.record_step(
+                "Top Tracks",
+                "GET",
+                "me/top/tracks?limit=5",
+                None,
+                Some(200),
+                &json_str,
+                true,
             );
         }
-        Err(e) => log.record_fail("Top Tracks", &e.to_string()),
+        Err(e) => log.record_step(
+            "Top Tracks",
+            "GET",
+            "me/top/tracks?limit=5",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
 
     // Top Artists
     match client.get_user_top_artists(5).await {
         Ok(artists) => {
-            log.record_pass(
-                "Top Artists (GET /v1/me/top/artists)",
-                &format!("Returned {} items", artists.items.len()),
+            let json_str = serde_json::to_string_pretty(&artists).unwrap_or_default();
+            log.record_step(
+                "Top Artists",
+                "GET",
+                "me/top/artists?limit=5",
+                None,
+                Some(200),
+                &json_str,
+                true,
             );
         }
-        Err(e) => log.record_fail("Top Artists", &e.to_string()),
+        Err(e) => log.record_step(
+            "Top Artists",
+            "GET",
+            "me/top/artists?limit=5",
+            None,
+            None,
+            &e.to_string(),
+            false,
+        ),
     }
     println!();
 }

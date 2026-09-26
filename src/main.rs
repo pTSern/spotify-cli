@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod commands;
 mod config;
+pub mod logger;
 mod models;
 mod ui;
 
@@ -231,9 +232,18 @@ async fn main() {
         }
     };
 
-    // Menu can be shown without login
+    // Menu can be shown with or without login
     if let Commands::Menu { category } = command {
-        commands::menu::run_menu(category);
+        let res = if config.access_token.is_some() {
+            let mut client = SpotifyClient::new(config);
+            commands::menu::run_menu(Some(&mut client), category).await
+        } else {
+            commands::menu::run_menu(None, category).await
+        };
+        if let Err(e) = res {
+            eprintln!("{}: {}", "Menu Error".red(), e);
+            logger::log_error("Menu Execution", &e.to_string(), None);
+        }
         return;
     }
 
@@ -251,6 +261,7 @@ async fn main() {
 
         if let Err(e) = res {
             eprintln!("{}: {}", "Auth Error".red(), e);
+            logger::log_error("Auth Command", &e.to_string(), None);
             std::process::exit(1);
         }
         return;
@@ -338,6 +349,7 @@ async fn main() {
 
     if let Err(e) = res {
         eprintln!("{}: {}", "Error".red(), e);
+        logger::log_error("CLI Command Execution", &e.to_string(), None);
         std::process::exit(1);
     }
 }

@@ -91,6 +91,15 @@ impl SpotifyClient {
 
         let err_body = res.text().await.unwrap_or_default();
 
+        let req_body_str = body.as_ref().map(|b| b.to_string());
+        crate::logger::log_api_call(
+            method.as_str(),
+            &url,
+            req_body_str.as_deref(),
+            Some(status.as_u16()),
+            &err_body,
+        );
+
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err(SpotifyError::RateLimited(5));
         }
