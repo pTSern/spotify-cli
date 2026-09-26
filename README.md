@@ -105,8 +105,9 @@ spotify-cli status              # or just 'spotify-cli'
 #   n / p     Next / Previous track
 #   f         Toggle Shuffle
 #   r         Cycle Repeat mode
-#   s         Open Settings menu (change seek/volume step)
-#   Esc / q   Exit player
+#   q         Toggle Queue list (displays upcoming songs below player)
+#   s         Open Settings menu (customize steps & keybindings)
+#   Esc / x   Exit player
 
 # One-shot static status (non-interactive)
 spotify-cli status --static     # alias: -s, --once

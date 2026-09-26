@@ -93,9 +93,10 @@ fn default_status_bindings() -> Vec<KeyBinding> {
         KeyBinding { action: "prev".to_string(), key: "p".to_string() },
         KeyBinding { action: "shuffle".to_string(), key: "f".to_string() },
         KeyBinding { action: "repeat".to_string(), key: "r".to_string() },
+        KeyBinding { action: "queue".to_string(), key: "q".to_string() },
         KeyBinding { action: "settings".to_string(), key: "s".to_string() },
         KeyBinding { action: "exit".to_string(), key: "Esc".to_string() },
-        KeyBinding { action: "exit".to_string(), key: "q".to_string() },
+        KeyBinding { action: "exit".to_string(), key: "x".to_string() },
     ]
 }
 

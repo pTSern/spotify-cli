@@ -1,7 +1,7 @@
 use crate::api::errors::SpotifyError;
 use crate::api::SpotifyClient;
 use crate::config::StatusSettings;
-use crate::models::PlaybackState;
+use crate::models::{PlaybackState, QueueResponse, Track};
 use crate::ui::{format_duration, print_playback_status};
 use anyhow::Result;
 use colored::Colorize;
@@ -123,6 +123,9 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
 
     let mut first_render = true;
     let mut last_display_sec: u64 = u64::MAX;
+    let mut show_queue = false;
+    let mut queue_cache: Option<QueueResponse> = None;
+    let mut last_rendered_lines: u16 = PLAYER_LINES;
 
     let _ = crossterm::execute!(stdout, Hide);
 
@@ -145,6 +148,9 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
             tokio::time::sleep(Duration::from_millis(600)).await;
             if let Ok(Some(fresh)) = client.get_playback_state().await {
                 state.update_from_playback(&fresh);
+                if show_queue {
+                    queue_cache = client.get_queue().await.ok();
+                }
                 force_render = true;
             }
         }
@@ -153,6 +159,9 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
         if now.duration_since(state.last_api_sync).as_secs() >= 20 {
             if let Ok(Some(fresh)) = client.get_playback_state().await {
                 state.update_from_playback(&fresh);
+                if show_queue {
+                    queue_cache = client.get_queue().await.ok();
+                }
                 force_render = true;
             }
         }
@@ -236,6 +245,9 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                     if let Ok(Some(fresh)) = client.get_playback_state().await {
                         state.update_from_playback(&fresh);
                     }
+                    if show_queue {
+                        queue_cache = client.get_queue().await.ok();
+                    }
                     force_render = true;
                 }
                 Some("prev") => {
@@ -243,6 +255,9 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     if let Ok(Some(fresh)) = client.get_playback_state().await {
                         state.update_from_playback(&fresh);
+                    }
+                    if show_queue {
+                        queue_cache = client.get_queue().await.ok();
                     }
                     force_render = true;
                 }
@@ -261,6 +276,13 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                     let _ = client.set_repeat(&state.repeat_state, None).await;
                     force_render = true;
                 }
+                Some("queue") => {
+                    show_queue = !show_queue;
+                    if show_queue {
+                        queue_cache = client.get_queue().await.ok();
+                    }
+                    force_render = true;
+                }
                 Some("settings") => {
                     let _ = crossterm::execute!(stdout, Show);
                     println!();
@@ -270,6 +292,7 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                     let _ = crossterm::execute!(stdout, Hide);
                     first_render = true;
                     force_render = true;
+                    last_rendered_lines = PLAYER_LINES;
                 }
                 Some("exit") => {
                     let _ = crossterm::execute!(stdout, Show);
@@ -282,7 +305,20 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
 
         let current_display_sec = state.current_ms / 1000;
         if first_render || force_render || current_display_sec != last_display_sec {
-            render_player(&state, &client.config.status_settings, vol_step, first_render);
+            let queue_slice = if show_queue {
+                queue_cache.as_ref().map(|q| q.queue.as_slice())
+            } else {
+                None
+            };
+            last_rendered_lines = render_player(
+                &state,
+                &client.config.status_settings,
+                vol_step,
+                queue_slice,
+                show_queue,
+                first_render,
+                last_rendered_lines,
+            );
             first_render = false;
             last_display_sec = current_display_sec;
         }
@@ -298,8 +334,11 @@ fn render_player(
     state: &LivePlayerState,
     status_settings: &StatusSettings,
     vol_step: u32,
+    queue_tracks: Option<&[Track]>,
+    show_queue: bool,
     first_render: bool,
-) {
+    last_rendered_lines: u16,
+) -> u16 {
     let play_badge = if state.is_playing {
         "▶ Playing".green().bold()
     } else {
@@ -341,6 +380,7 @@ fn render_player(
     let prev_keys = status_settings.keys_for_action("prev");
     let shuffle_keys = status_settings.keys_for_action("shuffle");
     let repeat_keys = status_settings.keys_for_action("repeat");
+    let queue_keys = status_settings.keys_for_action("queue");
     let settings_keys = status_settings.keys_for_action("settings");
     let exit_keys = status_settings.keys_for_action("exit");
 
@@ -362,9 +402,21 @@ fn render_player(
         format!("{}/{}", prev_keys, next_keys)
     };
 
+    let queue_display = if queue_keys.is_empty() {
+        "q".to_string()
+    } else {
+        queue_keys
+    };
+
+    let queue_badge = if show_queue {
+        format!("[{}] queue (open)", queue_display).cyan().bold()
+    } else {
+        format!("[{}] queue", queue_display).bright_black()
+    };
+
     let mut out = stdout();
     if !first_render {
-        let _ = crossterm::execute!(out, MoveUp(PLAYER_LINES), MoveToColumn(0), Clear(ClearType::FromCursorDown));
+        let _ = crossterm::execute!(out, MoveUp(last_rendered_lines), MoveToColumn(0), Clear(ClearType::FromCursorDown));
     }
 
     // Line 1
@@ -405,13 +457,48 @@ fn render_player(
     );
     // Line 8
     println!(
-        "  {} shuffle   {} repeat   {} settings   {} exit",
+        "  {} shuffle   {} repeat   {}   {} settings   {} exit",
         format!("[{}]", shuffle_keys).bright_black(),
         format!("[{}]", repeat_keys).bright_black(),
+        queue_badge,
         format!("[{}]", settings_keys).bright_black(),
         format!("[{}]", exit_keys).bright_black(),
     );
+
+    let mut lines_printed = PLAYER_LINES;
+
+    if show_queue {
+        println!("  {}", "── Upcoming Queue ──".bold().cyan());
+        lines_printed += 1;
+
+        match queue_tracks {
+            Some(tracks) if !tracks.is_empty() => {
+                for (i, t) in tracks.iter().take(5).enumerate() {
+                    let title_artist = format!("{}. {} - {}", i + 1, t.name, t.artists_str());
+                    let dur = format_duration(t.duration_ms);
+                    let max_item_w = term_width.saturating_sub(18).clamp(20, 50);
+                    println!(
+                        "    {:<width$} {}",
+                        truncate_str(&title_artist, max_item_w).white(),
+                        dur.bright_black(),
+                        width = max_item_w
+                    );
+                    lines_printed += 1;
+                }
+            }
+            Some(_) => {
+                println!("    {}", "(Queue is empty)".bright_black());
+                lines_printed += 1;
+            }
+            None => {
+                println!("    {}", "Loading queue...".bright_black());
+                lines_printed += 1;
+            }
+        }
+    }
+
     let _ = out.flush();
+    lines_printed
 }
 
 async fn manage_player_settings(client: &mut SpotifyClient) -> Result<()> {
@@ -480,6 +567,7 @@ fn manage_status_keybindings(client: &mut SpotifyClient) -> Result<()> {
                     "prev",
                     "shuffle",
                     "repeat",
+                    "queue",
                     "settings",
                     "exit",
                 ];
