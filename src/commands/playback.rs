@@ -1,10 +1,11 @@
 use crate::api::errors::SpotifyError;
 use crate::api::SpotifyClient;
+use crate::config::StatusSettings;
 use crate::models::PlaybackState;
 use crate::ui::{format_duration, print_playback_status};
 use anyhow::Result;
 use colored::Colorize;
-use crossterm::cursor::{Hide, MoveToColumn, MoveUp, Show};
+use crossterm::cursor::{Hide, MoveTo, MoveToColumn, MoveUp, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use std::io::{stdout, Write};
@@ -97,6 +98,15 @@ pub async fn run_status(client: &mut SpotifyClient, static_mode: bool) -> Result
     run_interactive_status(client).await
 }
 
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+}
+
 async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
     let initial_state = match client.get_playback_state().await? {
         Some(s) => s,
@@ -128,11 +138,14 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
         }
         state.last_tick = now;
 
+        let mut force_render = false;
+
         // Song completed check: fetch next song from Spotify API
         if state.is_playing && state.current_ms >= state.duration_ms && state.duration_ms > 0 {
             tokio::time::sleep(Duration::from_millis(600)).await;
             if let Ok(Some(fresh)) = client.get_playback_state().await {
                 state.update_from_playback(&fresh);
+                force_render = true;
             }
         }
 
@@ -140,14 +153,8 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
         if now.duration_since(state.last_api_sync).as_secs() >= 20 {
             if let Ok(Some(fresh)) = client.get_playback_state().await {
                 state.update_from_playback(&fresh);
+                force_render = true;
             }
-        }
-
-        let current_display_sec = state.current_ms / 1000;
-        if first_render || current_display_sec != last_display_sec {
-            render_player(&state, seek_step, vol_step, first_render);
-            first_render = false;
-            last_display_sec = current_display_sec;
         }
 
         // Poll for keyboard input (non-blocking tick 200ms)
@@ -169,37 +176,50 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
         disable_raw_mode()?;
 
         if let Some(code) = key_code {
-            match code {
-                // Seek forward
-                KeyCode::Right => {
+            let key_str = match code {
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => c.to_string(),
+                _ => String::new(),
+            };
+
+            let action = client
+                .config
+                .status_settings
+                .find_action(&key_str)
+                .map(|s| s.to_string());
+
+            match action.as_deref() {
+                Some("seek_forward") => {
                     let target_ms = (state.current_ms + (seek_step as u64 * 1000)).min(state.duration_ms);
                     state.current_ms = target_ms;
                     state.last_tick = Instant::now();
                     let _ = client.seek(target_ms, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Seek backward
-                KeyCode::Left => {
+                Some("seek_backward") => {
                     let target_ms = state.current_ms.saturating_sub(seek_step as u64 * 1000);
                     state.current_ms = target_ms;
                     state.last_tick = Instant::now();
                     let _ = client.seek(target_ms, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Volume Up
-                KeyCode::Up => {
+                Some("vol_up") => {
                     state.volume_percent = (state.volume_percent + vol_step).min(100);
                     let _ = client.set_volume(state.volume_percent, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Volume Down
-                KeyCode::Down => {
+                Some("vol_down") => {
                     state.volume_percent = state.volume_percent.saturating_sub(vol_step);
                     let _ = client.set_volume(state.volume_percent, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Toggle Play/Pause
-                KeyCode::Char(' ') | KeyCode::Char('t') => {
+                Some("toggle") => {
                     if state.is_playing {
                         let _ = client.pause(None).await;
                         state.is_playing = false;
@@ -208,34 +228,30 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                         state.is_playing = true;
                         state.last_tick = Instant::now();
                     }
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Next Track
-                KeyCode::Char('n') => {
+                Some("next") => {
                     let _ = client.next(None).await;
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     if let Ok(Some(fresh)) = client.get_playback_state().await {
                         state.update_from_playback(&fresh);
                     }
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Previous Track
-                KeyCode::Char('p') => {
+                Some("prev") => {
                     let _ = client.previous(None).await;
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     if let Ok(Some(fresh)) = client.get_playback_state().await {
                         state.update_from_playback(&fresh);
                     }
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Toggle Shuffle
-                KeyCode::Char('f') => {
+                Some("shuffle") => {
                     state.shuffle_state = !state.shuffle_state;
                     let _ = client.set_shuffle(state.shuffle_state, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Cycle Repeat
-                KeyCode::Char('r') => {
+                Some("repeat") => {
                     state.repeat_state = match state.repeat_state.as_str() {
                         "off" => "context",
                         "context" => "track",
@@ -243,18 +259,19 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                     }
                     .to_string();
                     let _ = client.set_repeat(&state.repeat_state, None).await;
-                    render_player(&state, seek_step, vol_step, false);
+                    force_render = true;
                 }
-                // Settings
-                KeyCode::Char('s') => {
+                Some("settings") => {
                     let _ = crossterm::execute!(stdout, Show);
                     println!();
                     manage_player_settings(client).await?;
+                    let _ = crossterm::execute!(stdout, Clear(ClearType::All), MoveTo(0, 0));
+                    println!("\n{}", "── Spotify Interactive Real-Time Player ──".green().bold());
                     let _ = crossterm::execute!(stdout, Hide);
                     first_render = true;
+                    force_render = true;
                 }
-                // Exit
-                KeyCode::Esc | KeyCode::Char('q') => {
+                Some("exit") => {
                     let _ = crossterm::execute!(stdout, Show);
                     println!("\n\n{}", "Exited interactive player.".bright_black());
                     break;
@@ -262,13 +279,27 @@ async fn run_interactive_status(client: &mut SpotifyClient) -> Result<()> {
                 _ => {}
             }
         }
+
+        let current_display_sec = state.current_ms / 1000;
+        if first_render || force_render || current_display_sec != last_display_sec {
+            render_player(&state, &client.config.status_settings, vol_step, first_render);
+            first_render = false;
+            last_display_sec = current_display_sec;
+        }
     }
 
     let _ = crossterm::execute!(stdout, Show);
     Ok(())
 }
 
-fn render_player(state: &LivePlayerState, seek_step: u32, vol_step: u32, first_render: bool) {
+const PLAYER_LINES: u16 = 8;
+
+fn render_player(
+    state: &LivePlayerState,
+    status_settings: &StatusSettings,
+    vol_step: u32,
+    first_render: bool,
+) {
     let play_badge = if state.is_playing {
         "▶ Playing".green().bold()
     } else {
@@ -287,7 +318,10 @@ fn render_player(state: &LivePlayerState, seek_step: u32, vol_step: u32, first_r
         _ => "🔁 off".bright_black(),
     };
 
-    let bar_width: usize = 30;
+    let term_width = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    let max_text_width = term_width.saturating_sub(15).clamp(20, 50);
+
+    let bar_width: usize = if term_width < 75 { 20 } else { 26 };
     let ratio = if state.duration_ms > 0 {
         (state.current_ms as f64 / state.duration_ms as f64).clamp(0.0, 1.0)
     } else {
@@ -298,15 +332,50 @@ fn render_player(state: &LivePlayerState, seek_step: u32, vol_step: u32, first_r
     let filled = "━".repeat(filled_len).green().bold();
     let unfilled = "─".repeat(unfilled_len).bright_black();
 
+    let seek_keys = status_settings.keys_for_action("seek_forward");
+    let seek_back_keys = status_settings.keys_for_action("seek_backward");
+    let vol_up_keys = status_settings.keys_for_action("vol_up");
+    let vol_down_keys = status_settings.keys_for_action("vol_down");
+    let toggle_keys = status_settings.keys_for_action("toggle");
+    let next_keys = status_settings.keys_for_action("next");
+    let prev_keys = status_settings.keys_for_action("prev");
+    let shuffle_keys = status_settings.keys_for_action("shuffle");
+    let repeat_keys = status_settings.keys_for_action("repeat");
+    let settings_keys = status_settings.keys_for_action("settings");
+    let exit_keys = status_settings.keys_for_action("exit");
+
+    let seek_display = if seek_back_keys == "Left" && seek_keys == "Right" {
+        "←/→".to_string()
+    } else {
+        format!("{}/{}", seek_back_keys, seek_keys)
+    };
+
+    let vol_display = if vol_down_keys == "Down" && vol_up_keys == "Up" {
+        "↑/↓".to_string()
+    } else {
+        format!("{}/{}", vol_down_keys, vol_up_keys)
+    };
+
+    let track_display = if prev_keys == "p" && next_keys == "n" {
+        "n/p".to_string()
+    } else {
+        format!("{}/{}", prev_keys, next_keys)
+    };
+
     let mut out = stdout();
     if !first_render {
-        let _ = crossterm::execute!(out, MoveUp(8), MoveToColumn(0), Clear(ClearType::FromCursorDown));
+        let _ = crossterm::execute!(out, MoveUp(PLAYER_LINES), MoveToColumn(0), Clear(ClearType::FromCursorDown));
     }
 
+    // Line 1
     println!("  {} {}", play_badge, "(Interactive Player)".bright_black());
-    println!("  {} {}", "Track:  ".bright_black(), state.track_name.bold().white());
-    println!("  {} {}", "Artist: ".bright_black(), state.artists.cyan());
-    println!("  {} {}", "Album:  ".bright_black(), state.album.italic());
+    // Line 2
+    println!("  {} {}", "Track:  ".bright_black(), truncate_str(&state.track_name, max_text_width).bold().white());
+    // Line 3
+    println!("  {} {}", "Artist: ".bright_black(), truncate_str(&state.artists, max_text_width).cyan());
+    // Line 4
+    println!("  {} {}", "Album:  ".bright_black(), truncate_str(&state.album, max_text_width).italic());
+    // Line 5
     println!(
         "  {} [{}{}] {} / {}",
         "Time:   ".bright_black(),
@@ -315,27 +384,32 @@ fn render_player(state: &LivePlayerState, seek_step: u32, vol_step: u32, first_r
         format_duration(state.current_ms).cyan(),
         format_duration(state.duration_ms).bright_black()
     );
+    // Line 6
     println!(
         "  {} {} | Vol: {} | {} | {}",
         "Device: ".bright_black(),
-        state.device_name.bold(),
+        truncate_str(&state.device_name, 18).bold(),
         format!("{}%", state.volume_percent).magenta(),
         shuffle_badge,
         repeat_badge
     );
-    println!();
+    // Line 7
     println!(
-        "  {} seek {}s   {} vol {}%   {} play/pause   {} next/prev   {} shuffle   {} repeat   {} settings   {} exit",
-        "[←/→]".bright_black(),
-        seek_step,
-        "[↑/↓]".bright_black(),
+        "  {} seek {}s   {} vol {}%   {} play/pause   {} track",
+        format!("[{}]", seek_display).bright_black(),
+        status_settings.seek_step,
+        format!("[{}]", vol_display).bright_black(),
         vol_step,
-        "[Space]".bright_black(),
-        "[n/p]".bright_black(),
-        "[f]".bright_black(),
-        "[r]".bright_black(),
-        "[s]".bright_black(),
-        "[Esc/q]".bright_black(),
+        format!("[{}]", toggle_keys).bright_black(),
+        format!("[{}]", track_display).bright_black(),
+    );
+    // Line 8
+    println!(
+        "  {} shuffle   {} repeat   {} settings   {} exit",
+        format!("[{}]", shuffle_keys).bright_black(),
+        format!("[{}]", repeat_keys).bright_black(),
+        format!("[{}]", settings_keys).bright_black(),
+        format!("[{}]", exit_keys).bright_black(),
     );
     let _ = out.flush();
 }
@@ -346,7 +420,8 @@ async fn manage_player_settings(client: &mut SpotifyClient) -> Result<()> {
         let options = vec![
             format!("1. Change Seek Step (Current: {}s)", client.config.status_settings.seek_step),
             format!("2. Change Volume Step (Current: {}%)", client.config.volume_settings.step),
-            "3. Return to Player".to_string(),
+            "3. View & Manage Keybindings (Add / Delete)".to_string(),
+            "4. Return to Player".to_string(),
         ];
 
         let choice = inquire::Select::new("Select settings option:", options).prompt()?;
@@ -367,11 +442,112 @@ async fn manage_player_settings(client: &mut SpotifyClient) -> Result<()> {
             client.config.volume_settings.step = new_step.clamp(1, 50);
             client.config.save()?;
             println!("{}", format!("✓ Volume step updated to {}%", client.config.volume_settings.step).green());
+        } else if choice.starts_with("3.") {
+            manage_status_keybindings(client)?;
         } else {
             break;
         }
     }
     println!();
+    Ok(())
+}
+
+fn manage_status_keybindings(client: &mut SpotifyClient) -> Result<()> {
+    loop {
+        println!("\n{}", "Current Player Keybindings:".bold());
+        for (i, b) in client.config.status_settings.bindings.iter().enumerate() {
+            println!("  {:>2}. Key: {:<10} -> Action: {}", i + 1, format!("[{}]", b.key).cyan(), b.action.yellow());
+        }
+
+        let options = vec![
+            "Add new keybinding",
+            "Delete an existing keybinding",
+            "Reset keybindings to default",
+            "Back to settings",
+        ];
+
+        let action = inquire::Select::new("Keybinding action:", options).prompt()?;
+
+        match action {
+            "Add new keybinding" => {
+                let action_choices = vec![
+                    "seek_forward",
+                    "seek_backward",
+                    "vol_up",
+                    "vol_down",
+                    "toggle",
+                    "next",
+                    "prev",
+                    "shuffle",
+                    "repeat",
+                    "settings",
+                    "exit",
+                ];
+                let selected_action = inquire::Select::new("Bind to which action?", action_choices).prompt()?;
+
+                let key_input: String = inquire::Text::new("Press or type key name (e.g. d, a, w, Space, Right, Left, Up, Down, q, Esc):")
+                    .with_placeholder("e.g. d")
+                    .prompt()?;
+
+                let trimmed_key = key_input.trim().to_string();
+                if trimmed_key.is_empty() {
+                    println!("{}", "Key cannot be empty.".red());
+                    continue;
+                }
+
+                // Check if already bound
+                if client.config.status_settings.bindings.iter().any(|b| b.key.to_lowercase() == trimmed_key.to_lowercase()) {
+                    println!("{}", format!("Key '{}' is already bound to an action.", trimmed_key).yellow());
+                    continue;
+                }
+
+                client.config.status_settings.bindings.push(crate::config::KeyBinding {
+                    action: selected_action.to_string(),
+                    key: trimmed_key.clone(),
+                });
+                client.config.save()?;
+                println!("{}", format!("✓ Added [{}] for action '{}'", trimmed_key, selected_action).green());
+            }
+            "Delete an existing keybinding" => {
+                let choices: Vec<String> = client
+                    .config
+                    .status_settings
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| format!("{}. [{}] for {}", i + 1, b.key, b.action))
+                    .collect();
+
+                let to_delete = inquire::Select::new("Select keybinding to delete:", choices).prompt()?;
+                let idx = to_delete.split('.').next().unwrap().parse::<usize>()? - 1;
+
+                // Safety Rule: Do not allow deleting if it's the only key for that action!
+                if !client.config.status_settings.can_delete_binding(idx) {
+                    let action = &client.config.status_settings.bindings[idx].action;
+                    println!(
+                        "{}",
+                        format!(
+                            "❌ Cannot delete: At least one keybinding must remain for action '{}'!",
+                            action
+                        )
+                        .red()
+                        .bold()
+                    );
+                    continue;
+                }
+
+                let removed = client.config.status_settings.bindings.remove(idx);
+                client.config.save()?;
+                println!("{}", format!("✓ Deleted [{}] for {}", removed.key, removed.action).green());
+            }
+            "Reset keybindings to default" => {
+                client.config.status_settings = crate::config::StatusSettings::default();
+                client.config.save()?;
+                println!("{}", "✓ Keybindings reset to defaults!".green());
+            }
+            _ => break,
+        }
+    }
     Ok(())
 }
 

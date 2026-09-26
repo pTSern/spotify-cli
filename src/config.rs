@@ -81,14 +81,71 @@ impl VolumeSettings {
     }
 }
 
+fn default_status_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding { action: "seek_forward".to_string(), key: "Right".to_string() },
+        KeyBinding { action: "seek_backward".to_string(), key: "Left".to_string() },
+        KeyBinding { action: "vol_up".to_string(), key: "Up".to_string() },
+        KeyBinding { action: "vol_down".to_string(), key: "Down".to_string() },
+        KeyBinding { action: "toggle".to_string(), key: "Space".to_string() },
+        KeyBinding { action: "toggle".to_string(), key: "t".to_string() },
+        KeyBinding { action: "next".to_string(), key: "n".to_string() },
+        KeyBinding { action: "prev".to_string(), key: "p".to_string() },
+        KeyBinding { action: "shuffle".to_string(), key: "f".to_string() },
+        KeyBinding { action: "repeat".to_string(), key: "r".to_string() },
+        KeyBinding { action: "settings".to_string(), key: "s".to_string() },
+        KeyBinding { action: "exit".to_string(), key: "Esc".to_string() },
+        KeyBinding { action: "exit".to_string(), key: "q".to_string() },
+    ]
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StatusSettings {
     pub seek_step: u32, // in seconds, default 10
+    #[serde(default = "default_status_bindings")]
+    pub bindings: Vec<KeyBinding>,
 }
 
 impl Default for StatusSettings {
     fn default() -> Self {
-        Self { seek_step: 10 }
+        Self {
+            seek_step: 10,
+            bindings: default_status_bindings(),
+        }
+    }
+}
+
+impl StatusSettings {
+    pub fn count_action_bindings(&self, action: &str) -> usize {
+        self.bindings.iter().filter(|b| b.action == action).count()
+    }
+
+    pub fn can_delete_binding(&self, index: usize) -> bool {
+        if index >= self.bindings.len() {
+            return false;
+        }
+        let action = &self.bindings[index].action;
+        self.count_action_bindings(action) > 1
+    }
+
+    pub fn find_action(&self, key_name: &str) -> Option<&str> {
+        let key_lower = key_name.to_lowercase();
+        for b in &self.bindings {
+            if b.key.to_lowercase() == key_lower {
+                return Some(&b.action);
+            }
+        }
+        None
+    }
+
+    pub fn keys_for_action(&self, action: &str) -> String {
+        let keys: Vec<&str> = self
+            .bindings
+            .iter()
+            .filter(|b| b.action == action)
+            .map(|b| b.key.as_str())
+            .collect();
+        keys.join("/")
     }
 }
 
