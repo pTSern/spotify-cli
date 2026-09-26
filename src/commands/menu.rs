@@ -1,5 +1,5 @@
 use crate::api::SpotifyClient;
-use crate::commands::{devices, library, playback, queue, search, test, volume};
+use crate::commands::{devices, library, playback, playlist, queue, search, test, volume};
 use anyhow::Result;
 use colored::Colorize;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
@@ -170,6 +170,64 @@ const COMMANDS: &[CommandEntry] = &[
         description: "Add currently playing track to queue again",
     },
 
+    // Playlists
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist",
+        aliases: "pl",
+        example: "spotify-cli playlist",
+        description: "Interactive playlist management hub (list, play, create, edit, mix)",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist list",
+        aliases: "pl ls",
+        example: "spotify-cli playlist list",
+        description: "List all your playlists with track count, privacy, and mix status",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist play [name]",
+        aliases: "pl p",
+        example: "spotify-cli playlist play \"My Playlist\" [--shuffle]",
+        description: "Play a playlist by name or interactively with optional shuffle/mix",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist tracks [name]",
+        aliases: "pl t",
+        example: "spotify-cli playlist tracks \"My Playlist\"",
+        description: "View tracks inside playlist with option to play any track",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist create <name>",
+        aliases: "pl new",
+        example: "spotify-cli playlist create \"Chill\" -d \"Relaxing\" --mix",
+        description: "Create a new playlist with optional description, privacy, or mix",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist add [song]",
+        aliases: "pl a",
+        example: "spotify-cli playlist add --current",
+        description: "Add current track or search query to one of your playlists",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist mix [name]",
+        aliases: "pl m",
+        example: "spotify-cli playlist mix \"My Playlist\" --on",
+        description: "Toggle or set collaborative mix mode for a playlist",
+    },
+    CommandEntry {
+        category: "Playlists",
+        command: "playlist edit [name]",
+        aliases: "pl ed",
+        example: "spotify-cli playlist edit",
+        description: "Edit playlist metadata (name, description, privacy, mix)",
+    },
+
     // Library
     CommandEntry {
         category: "Library",
@@ -269,6 +327,7 @@ pub async fn run_menu(
         "🔊 Volume Controller (Interactive TUI with shortcuts)",
         "📱 Devices Manager (List & Switch device)",
         "📜 Playback Queue & Direct Play",
+        "🎵 Playlists Hub (Play, Create, Add song, Edit, Mix)",
         "🔍 Search Spotify (Interactive results with Play/Queue)",
         "💾 Save Currently Playing Track",
         "🕒 Recently Played History",
@@ -312,6 +371,8 @@ pub async fn run_menu(
         devices::run_devices(client, None, false).await?;
     } else if choice.starts_with("📜") {
         queue::run_queue(client, None, "track").await?;
+    } else if choice.starts_with("🎵") {
+        playlist::run_playlist(client, None).await?;
     } else if choice.starts_with("🔍") {
         let q = inquire::Text::new("Enter search query:").prompt()?;
         if !q.trim().is_empty() {
@@ -336,6 +397,7 @@ fn print_tables(category_filter: &str) {
         "Volume",
         "Devices",
         "Search & Queue",
+        "Playlists",
         "Library",
         "Diagnostics",
         "Auth",

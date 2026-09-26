@@ -136,6 +136,13 @@ enum Commands {
         limit: u32,
     },
 
+    /// Manage, view, create, edit, and play playlists
+    #[command(alias = "pl", alias = "playlists")]
+    Playlist {
+        #[command(subcommand)]
+        action: Option<PlaylistCommands>,
+    },
+
     /// Display CLI command menu and cheatsheet (interactive or by category)
     #[command(alias = "m", alias = "commands", alias = "help-menu")]
     Menu {
@@ -148,6 +155,85 @@ enum Commands {
     Test {
         /// Filter: playback, volume, devices, search, library, or all
         filter: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PlaylistCommands {
+    /// List your playlists
+    #[command(alias = "ls")]
+    List {
+        /// Number of playlists to fetch (default: 50)
+        #[arg(short = 'l', long = "limit", default_value_t = 50)]
+        limit: u32,
+    },
+
+    /// Play a playlist
+    #[command(alias = "p")]
+    Play {
+        /// Playlist name, number, or URI/ID (interactive selector if omitted)
+        query: Option<String>,
+        /// Enable shuffle / mix mode when playing
+        #[arg(short = 's', long = "shuffle", alias = "mix")]
+        shuffle: bool,
+    },
+
+    /// View songs inside a playlist
+    Tracks {
+        /// Playlist name, number, or URI/ID (interactive selector if omitted)
+        playlist: Option<String>,
+    },
+
+    /// Create a new playlist
+    Create {
+        /// Name of the new playlist
+        name: Option<String>,
+        /// Description of the playlist
+        #[arg(short = 'd', long = "desc")]
+        description: Option<String>,
+        /// Make the playlist public (default: false)
+        #[arg(long = "public")]
+        public: bool,
+        /// Make the playlist collaborative / mix (default: false)
+        #[arg(long = "collaborative", alias = "mix")]
+        collaborative: bool,
+    },
+
+    /// Add a track to a playlist
+    Add {
+        /// Target playlist name, number, or URI/ID
+        playlist: Option<String>,
+        /// Song name or URI (interactive search if omitted)
+        song: Option<String>,
+        /// Add currently playing track
+        #[arg(short = 'c', long = "current")]
+        current: bool,
+    },
+
+    /// Toggle or set collaborative / mix mode on a playlist
+    Mix {
+        /// Playlist name, number, or URI/ID
+        playlist: Option<String>,
+        /// Set mix mode on/off ('on', 'off', or toggle if omitted)
+        state: Option<String>,
+    },
+
+    /// Edit playlist details (name, description, privacy, mix)
+    Edit {
+        /// Playlist name, number, or URI/ID
+        playlist: Option<String>,
+        /// New name for playlist
+        #[arg(long = "name")]
+        name: Option<String>,
+        /// New description for playlist
+        #[arg(short = 'd', long = "desc")]
+        description: Option<String>,
+        /// Set public visibility ('true' or 'false')
+        #[arg(long = "public")]
+        public: Option<bool>,
+        /// Set collaborative / mix mode ('true' or 'false')
+        #[arg(long = "collaborative", alias = "mix")]
+        collaborative: Option<bool>,
     },
 }
 
@@ -283,6 +369,24 @@ async fn main() {
         Commands::Auth { .. } => unreachable!(),
         Commands::Menu { .. } => unreachable!(),
         Commands::Test { filter } => commands::test::run_test(&mut client, filter).await,
+        Commands::Playlist { action } => {
+            let sub = action.map(|a| match a {
+                PlaylistCommands::List { limit } => commands::playlist::PlaylistSubcommand::List { limit },
+                PlaylistCommands::Play { query, shuffle } => commands::playlist::PlaylistSubcommand::Play { query, shuffle },
+                PlaylistCommands::Tracks { playlist } => commands::playlist::PlaylistSubcommand::Tracks { playlist },
+                PlaylistCommands::Create { name, description, public, collaborative } => {
+                    commands::playlist::PlaylistSubcommand::Create { name, description, public, collaborative }
+                }
+                PlaylistCommands::Add { playlist, song, current } => {
+                    commands::playlist::PlaylistSubcommand::Add { playlist, song, current }
+                }
+                PlaylistCommands::Mix { playlist, state } => commands::playlist::PlaylistSubcommand::Mix { playlist, state },
+                PlaylistCommands::Edit { playlist, name, description, public, collaborative } => {
+                    commands::playlist::PlaylistSubcommand::Edit { playlist, name, description, public, collaborative }
+                }
+            });
+            commands::playlist::run_playlist(&mut client, sub).await
+        }
         Commands::Status { r#static } => commands::playback::run_status(&mut client, r#static).await,
         Commands::Play(args) => {
             let q = if args.query.is_empty() {

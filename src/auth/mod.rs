@@ -24,6 +24,8 @@ pub const SCOPES: &[&str] = &[
     "user-follow-modify",
     "playlist-read-private",
     "playlist-read-collaborative",
+    "playlist-modify-public",
+    "playlist-modify-private",
 ];
 
 #[derive(Debug, Deserialize, Serialize)]

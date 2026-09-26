@@ -19,6 +19,7 @@ A blazingly fast, standalone command-line interface to control Spotify playback 
     Device: My PC (Computer) | Vol: 75% | 🔀 off | 🔁 all
   ```
 - **Device Management**: List devices and switch active player interactively.
+- **Playlist Management**: Complete playlist hub: list, play (with mix/shuffle), inspect tracklist & play individual songs, create, add current or searched songs, toggle collaborative mix mode, and edit playlist details.
 - **Interactive Search**: Paginated results table with interactive actions:
   - `Play track`
   - `Queue track`
@@ -176,6 +177,42 @@ spotify-cli queue --album "thriller"
 
 # Queue the song that is currently playing
 spotify-cli queue .
+```
+
+### Playlists
+```bash
+# Interactive playlist management hub (browse, play, create, add, edit, mix)
+spotify-cli playlist            # alias: spotify-cli pl
+
+# List all your playlists with track count, privacy, and collaborative mix status
+spotify-cli playlist list       # alias: spotify-cli pl ls
+
+# Play a playlist (by name, number, or URI)
+spotify-cli playlist play "Chill Beats"
+spotify-cli playlist play "Chill Beats" --shuffle   # or -s (play in mix/shuffle mode)
+spotify-cli playlist play       # interactive selector if name omitted
+
+# View tracks inside a playlist (with inline option to play any track or entire playlist)
+spotify-cli playlist tracks "Chill Beats"   # alias: spotify-cli pl t
+
+# Create a new playlist
+spotify-cli playlist create "Late Night Coding"
+spotify-cli playlist create "Team Jam" -d "Office mix" --collaborative
+spotify-cli playlist create     # interactive prompts for name, privacy, description
+
+# Add songs to a playlist
+spotify-cli playlist add "Team Jam" "Bohemian Rhapsody"
+spotify-cli playlist add "Chill Beats" --current   # add currently playing track
+spotify-cli playlist add        # interactive playlist and song selector
+
+# Toggle or set Collaborative / Mix mode
+spotify-cli playlist mix "Team Jam"          # toggles mix mode
+spotify-cli playlist mix "Team Jam" on       # enable mix
+spotify-cli playlist mix "Team Jam" off      # disable mix
+
+# Edit playlist metadata (name, description, privacy, mix)
+spotify-cli playlist edit "Team Jam" --name "Office Grooves" -d "Updated weekly"
+spotify-cli playlist edit       # interactive editor
 ```
 
 ### Interactive Search

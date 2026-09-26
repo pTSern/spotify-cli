@@ -112,6 +112,23 @@ pub struct Playlist {
     pub description: Option<String>,
     pub owner: Option<PlaylistOwner>,
     pub tracks: Option<PlaylistTracksRef>,
+    #[serde(default)]
+    pub public: Option<bool>,
+    #[serde(default)]
+    pub collaborative: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistTrackItem {
+    pub track: Option<Track>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistTracksResponse {
+    pub items: Vec<PlaylistTrackItem>,
+    pub total: u32,
+    pub limit: u32,
+    pub offset: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

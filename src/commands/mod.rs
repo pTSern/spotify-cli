@@ -3,6 +3,7 @@ pub mod devices;
 pub mod library;
 pub mod menu;
 pub mod playback;
+pub mod playlist;
 pub mod queue;
 pub mod search;
 pub mod test;

@@ -110,7 +110,7 @@ impl SpotifyClient {
             }
             return Err(SpotifyError::ApiError {
                 status: status.as_u16(),
-                message: "Forbidden: check account permissions or Spotify Premium status".to_string(),
+                message: "Forbidden: check account permissions or Spotify Premium status. (If using playlist features, run `spotify auth login` once to grant updated permissions)".to_string(),
             });
         }
 
@@ -342,6 +342,85 @@ impl SpotifyClient {
     pub async fn follow_artists(&mut self, ids: &[&str]) -> Result<(), SpotifyError> {
         let endpoint = format!("me/following?type=artist&ids={}", ids.join(","));
         self.send_empty(Method::PUT, &endpoint, None).await
+    }
+
+    pub async fn get_current_user(&mut self) -> Result<UserProfile, SpotifyError> {
+        self.get_json("me").await
+    }
+
+    pub async fn get_user_playlists(&mut self, limit: u32, offset: u32) -> Result<Paginated<Playlist>, SpotifyError> {
+        let endpoint = format!("me/playlists?limit={}&offset={}", limit.min(50), offset);
+        self.get_json(&endpoint).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_playlist(&mut self, playlist_id: &str) -> Result<Playlist, SpotifyError> {
+        let endpoint = format!("playlists/{}", playlist_id);
+        self.get_json(&endpoint).await
+    }
+
+    pub async fn get_playlist_tracks(&mut self, playlist_id: &str, limit: u32, offset: u32) -> Result<PlaylistTracksResponse, SpotifyError> {
+        let endpoint = format!("playlists/{}/tracks?limit={}&offset={}", playlist_id, limit.min(50), offset);
+        self.get_json(&endpoint).await
+    }
+
+    pub async fn create_playlist(
+        &mut self,
+        user_id: &str,
+        name: &str,
+        description: Option<&str>,
+        is_public: bool,
+        is_collaborative: bool,
+    ) -> Result<Playlist, SpotifyError> {
+        let endpoint = format!("users/{}/playlists", user_id);
+        let mut body = serde_json::json!({
+            "name": name,
+            "public": is_public,
+            "collaborative": is_collaborative
+        });
+        if let Some(desc) = description {
+            body["description"] = serde_json::Value::String(desc.to_string());
+        }
+        let res = self.execute_request(Method::POST, &endpoint, Some(body)).await?;
+        let playlist = res.json::<Playlist>().await?;
+        Ok(playlist)
+    }
+
+    pub async fn add_tracks_to_playlist(
+        &mut self,
+        playlist_id: &str,
+        track_uris: &[&str],
+    ) -> Result<(), SpotifyError> {
+        let endpoint = format!("playlists/{}/tracks", playlist_id);
+        let body = serde_json::json!({
+            "uris": track_uris
+        });
+        self.send_empty(Method::POST, &endpoint, Some(body)).await
+    }
+
+    pub async fn change_playlist_details(
+        &mut self,
+        playlist_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        is_public: Option<bool>,
+        is_collaborative: Option<bool>,
+    ) -> Result<(), SpotifyError> {
+        let endpoint = format!("playlists/{}", playlist_id);
+        let mut map = serde_json::Map::new();
+        if let Some(n) = name {
+            map.insert("name".to_string(), serde_json::Value::String(n.to_string()));
+        }
+        if let Some(d) = description {
+            map.insert("description".to_string(), serde_json::Value::String(d.to_string()));
+        }
+        if let Some(p) = is_public {
+            map.insert("public".to_string(), serde_json::Value::Bool(p));
+        }
+        if let Some(c) = is_collaborative {
+            map.insert("collaborative".to_string(), serde_json::Value::Bool(c));
+        }
+        self.send_empty(Method::PUT, &endpoint, Some(serde_json::Value::Object(map))).await
     }
 }
 
